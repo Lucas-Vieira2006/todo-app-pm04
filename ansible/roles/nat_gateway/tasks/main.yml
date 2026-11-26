@@ -1,0 +1,42 @@
+---
+# A VM da aplicação encaminha o tráfego de saída da sub-rede privada (VM do banco),
+# substituindo um NAT Gateway pago. O Terraform aponta a rota 0.0.0.0/0 da sub-rede privada para esta VM.
+- name: Instalar iptables
+  ansible.builtin.apt:
+    name: iptables
+    state: present
+
+- name: Habilitar encaminhamento IPv4
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_file: /etc/sysctl.d/90-todo-nat.conf
+    reload: true
+
+- name: Instalar script de NAT
+  ansible.builtin.template:
+    src: todo-nat.sh.j2
+    dest: /usr/local/sbin/todo-nat.sh
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Reaplicar NAT
+
+- name: Instalar serviço systemd do NAT
+  ansible.builtin.template:
+    src: todo-nat.service.j2
+    dest: /etc/systemd/system/todo-nat.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reaplicar NAT
+
+- name: Habilitar e iniciar o NAT
+  ansible.builtin.systemd_service:
+    name: todo-nat.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Aplicar alterações pendentes do NAT
+  ansible.builtin.meta: flush_handlers

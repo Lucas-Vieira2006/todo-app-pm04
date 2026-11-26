@@ -1,0 +1,38 @@
+#!/bin/bash
+# Teste de restauração: baixa o backup mais recente do S3 e restaura em um contêiner
+# isolado (sem rede), sem tocar no banco da demonstração. Gerenciado pelo Ansible.
+set -euo pipefail
+
+TEST_CONTAINER="todo-mongo-restore-test"
+WORK="$(mktemp -d)"
+cleanup() { docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+trap cleanup EXIT
+
+NAME="${1:-$(/usr/local/sbin/todo-s3 latest)}"
+BASE="${NAME%.archive.gz}"
+echo "Backup selecionado: $NAME"
+/usr/local/sbin/todo-s3 get "$NAME" "$WORK/backup.archive.gz"
+/usr/local/sbin/todo-s3 get "$BASE.json" "$WORK/manifest.json"
+
+EXPECTED_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$WORK/manifest.json")"
+EXPECTED_COUNT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["todos_count"])' "$WORK/manifest.json")"
+ACTUAL_SHA="$(sha256sum "$WORK/backup.archive.gz" | cut -d' ' -f1)"
+[ "$EXPECTED_SHA" = "$ACTUAL_SHA" ] || { echo "FALHA: checksum diferente do manifesto"; exit 1; }
+echo "Checksum conferido: $ACTUAL_SHA"
+
+docker rm -f "$TEST_CONTAINER" >/dev/null 2>&1 || true
+docker run -d --name "$TEST_CONTAINER" --network none --tmpfs /data/db \
+  "{{ mongo_image }}" --wiredTigerCacheSizeGB 0.25 >/dev/null
+
+for _ in $(seq 1 30); do
+  docker exec "$TEST_CONTAINER" mongosh --quiet --eval "db.adminCommand('ping').ok" >/dev/null 2>&1 && break
+  sleep 2
+done
+
+docker cp "$WORK/backup.archive.gz" "$TEST_CONTAINER:/tmp/backup.archive.gz"
+docker exec "$TEST_CONTAINER" mongorestore --quiet --archive=/tmp/backup.archive.gz --gzip
+
+RESTORED="$(docker exec "$TEST_CONTAINER" mongosh --quiet --eval "db.getSiblingDB('{{ mongo_database }}').todos.countDocuments()")"
+echo "Tarefas no manifesto: $EXPECTED_COUNT | tarefas restauradas no ambiente isolado: $RESTORED"
+[ "$RESTORED" = "$EXPECTED_COUNT" ] || { echo "FALHA: quantidade restaurada diferente"; exit 1; }
+echo "RESTAURAÇÃO VALIDADA em contêiner isolado (--network none); banco da demonstração não foi alterado."

@@ -1,0 +1,13 @@
+---
+- name: Coletar logs dos contêineres
+  ansible.builtin.command: "docker logs --tail {{ ops_log_lines }} --timestamps {{ item }}"
+  register: ops_logs
+  changed_when: false
+  loop: "{{ ops_app_containers if inventory_hostname in groups['app'] else [mongo_container_name] }}"
+
+- name: Exibir logs
+  ansible.builtin.debug:
+    msg: "{{ ['==== ' ~ item.item ~ ' ===='] + item.stdout_lines + item.stderr_lines }}"
+  loop: "{{ ops_logs.results }}"
+  loop_control:
+    label: "{{ item.item }}"

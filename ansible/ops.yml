@@ -1,0 +1,7 @@
+---
+# Rotinas operacionais (pipeline ops.yml): ansible-playbook ops.yml -e ops_action=health
+- name: Rotinas operacionais do todo-app
+  hosts: all
+  become: true
+  roles:
+    - ops

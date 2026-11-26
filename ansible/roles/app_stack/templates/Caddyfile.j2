@@ -1,0 +1,8 @@
+# Gerenciado pelo Ansible (todo-app). Certificado HTTPS emitido e renovado automaticamente.
+{{ app_domain }} {
+	encode gzip
+	reverse_proxy frontend:80
+	log {
+		output stdout
+	}
+}

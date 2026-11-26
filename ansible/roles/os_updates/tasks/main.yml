@@ -1,0 +1,42 @@
+---
+# Verifica sempre as atualizações pendentes; aplica somente com update_os=true.
+# Sempre atualiza o índice: um cache "recente" mas incompleto (imagem nova) esconderia pacotes e atualizações
+- name: Atualizar o índice de pacotes
+  ansible.builtin.apt:
+    update_cache: true
+  # Atualizar o índice não altera a configuração do servidor
+  changed_when: false
+
+- name: Listar pacotes com atualização pendente (simulação, não instala nada)
+  ansible.builtin.command: apt-get -s -o Debug::NoLocking=1 dist-upgrade # noqa: command-instead-of-module
+  register: os_updates_simulation
+  changed_when: false
+
+- name: Registrar quantidade de atualizações pendentes
+  ansible.builtin.set_fact:
+    os_updates_pending: "{{ os_updates_simulation.stdout_lines | select('match', '^Inst ') | list | length }}"
+
+- name: Exibir atualizações pendentes
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: {{ os_updates_pending }} pacote(s) com atualização pendente; update_os={{ update_os | bool }}"
+
+- name: Aplicar atualizações do sistema operacional
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+  when: update_os | bool
+  register: os_updates_result
+
+- name: Verificar se o Ubuntu pede reinicialização
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: os_updates_reboot_flag
+
+- name: Reiniciar a VM para concluir a atualização
+  ansible.builtin.reboot:
+    msg: "Reinicialização após atualização do sistema (todo-app)"
+    reboot_timeout: 600
+  when:
+    - update_os | bool
+    - reboot_if_required | bool
+    - os_updates_reboot_flag.stat.exists

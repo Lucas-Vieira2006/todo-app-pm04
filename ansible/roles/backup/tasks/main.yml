@@ -1,0 +1,50 @@
+---
+- name: Instalar dependências dos scripts de backup
+  ansible.builtin.apt:
+    name: python3-boto3
+    state: present
+
+- name: Criar diretório de backups locais
+  ansible.builtin.file:
+    path: "{{ backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Instalar scripts de backup, restauração e limpeza da lista
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - todo-s3
+    - todo-backup
+    - todo-restore-test
+    - todo-restore
+    - todo-reset-demo
+
+- name: Agendar backup diário
+  ansible.builtin.cron:
+    name: todo-app backup diario
+    minute: "{{ backup_cron_minute }}"
+    hour: "{{ backup_cron_hour }}"
+    job: "/usr/local/sbin/todo-backup >> /var/log/todo-backup.log 2>&1"
+    user: root
+
+- name: Rotacionar o log de backup
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/todo-backup
+    content: |
+      /var/log/todo-backup.log {
+        weekly
+        rotate 4
+        compress
+        missingok
+        notifempty
+      }
+    owner: root
+    group: root
+    mode: "0644"

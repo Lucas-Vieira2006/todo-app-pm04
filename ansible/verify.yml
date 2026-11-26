@@ -1,0 +1,12 @@
+---
+# Verificação dos serviços e contêineres (etapa 11 da pipeline). Não altera os servidores.
+- name: Verificação final dos serviços
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Verificar serviços e contêineres
+      ansible.builtin.include_role:
+        name: verify
+      vars:
+        verify_expected_containers: "{{ ['caddy', 'frontend', 'backend'] if inventory_hostname in groups['app'] else [mongo_container_name] }}"

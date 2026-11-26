@@ -1,0 +1,67 @@
+---
+- name: Definir o fuso horário
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+- name: Restringir o acesso SSH (somente chave, sem login de root)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-todo-app.conf
+    content: |
+      # Gerenciado pelo Ansible (todo-app)
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar ssh
+
+- name: Configurar swap (swap_size_mb igual a 0 desativa)
+  when: swap_size_mb | int > 0
+  block:
+    - name: Verificar se o swapfile existe
+      ansible.builtin.stat:
+        path: /swapfile
+      register: system_swapfile
+
+    - name: Criar o swapfile
+      ansible.builtin.command: "dd if=/dev/zero of=/swapfile bs=1M count={{ swap_size_mb }}"
+      args:
+        creates: /swapfile
+      when: not system_swapfile.stat.exists
+
+    - name: Ajustar permissões do swapfile
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Formatar o swapfile
+      ansible.builtin.command: mkswap /swapfile
+      when: not system_swapfile.stat.exists
+      changed_when: true
+
+    - name: Registrar o swap no fstab
+      ansible.posix.mount:
+        path: none
+        src: /swapfile
+        fstype: swap
+        opts: sw
+        state: present
+
+    - name: Verificar swap ativo
+      ansible.builtin.command: swapon --show=NAME --noheadings
+      register: system_swap_active
+      changed_when: false
+
+    - name: Ativar o swap
+      ansible.builtin.command: swapon /swapfile
+      when: "'/swapfile' not in system_swap_active.stdout"
+      changed_when: true
+
+    - name: Reduzir o uso de swap a situações de pouca memória
+      ansible.posix.sysctl:
+        name: vm.swappiness
+        value: "10"
+        sysctl_file: /etc/sysctl.d/90-todo-app.conf

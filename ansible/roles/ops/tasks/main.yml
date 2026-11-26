@@ -1,0 +1,11 @@
+---
+- name: Validar a rotina solicitada
+  ansible.builtin.assert:
+    that:
+      - ops_action in ops_actions_allowed
+      - ops_action not in ops_actions_destructive or ops_confirm | default('') == 'CONFIRMAR'
+    fail_msg: "Rotina inválida ou sem confirmação. Rotinas: {{ ops_actions_allowed }}; destrutivas exigem confirm=CONFIRMAR"
+    quiet: true
+
+- name: Executar a rotina {{ ops_action }}
+  ansible.builtin.include_tasks: "{{ ops_action }}.yml"

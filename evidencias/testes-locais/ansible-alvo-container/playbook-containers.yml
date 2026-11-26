@@ -1,0 +1,12 @@
+---
+# Executa os roles de contêiner do projeto contra os alvos de teste, com imagens SUBSTITUTAS
+# carregadas localmente (mesmos nomes/tags; respondem apenas aos healthchecks).
+- name: Alvo db - MongoDB e backups
+  hosts: db
+  become: true
+  roles: [mongodb, backup]
+
+- name: Alvo app - Caddy, frontend e API
+  hosts: app
+  become: true
+  roles: [app_stack]

@@ -8,3 +8,18 @@ data/
 *.log
 .DS_Store
 Thumbs.db
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+terraform.tfvars
+crash.log
+
+# Ansible (inventário gerado pela pipeline)
+ansible/inventory/hosts.yml
+
+# Evidências temporárias da pipeline (publicadas como artifact)
+run-evidence/

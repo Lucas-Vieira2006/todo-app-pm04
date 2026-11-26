@@ -1,40 +1,61 @@
-version: '3.8'
+# Execução local dos três serviços. Copie .env.example para .env antes de subir.
+# Na nuvem, cada serviço é gerenciado pelo Ansible (ver ansible/).
 
 services:
   frontend:
     build:
-      context: ./frontend  # Diretório do frontend
+      context: ./frontend
     ports:
-      - "80:80"  # Expõe a porta 80 do contêiner para a porta 80 do host
+      - "80:80"
     networks:
       - todo-net
     depends_on:
-      - backend  # Garante que o backend esteja rodando antes de subir o frontend
+      backend:
+        condition: service_healthy
 
   backend:
     build:
-      context: ./backend  # Diretório do backend
-    ports:
-      - "5000:5000"  # Expõe a porta 5000 do contêiner para a porta 5000 do host
+      context: ./backend
+    environment:
+      MONGO_URI: "mongodb://${MONGO_APP_USER}:${MONGO_APP_PASSWORD}@mongo:27017/todo-app?authSource=todo-app"
     networks:
       - todo-net
+    restart: unless-stopped
+    healthcheck:
+      # GET /todos só responde 200 com a API conectada ao banco
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/todos"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     depends_on:
-      - mongo  # Garante que o MongoDB esteja rodando antes de iniciar o backend
+      mongo:
+        condition: service_healthy
 
   mongo:
-    build:
-      context: ./banco-de-dados  # Diretório do backend
-    container_name: mongo-todo
-    ports:
-      - "27017:27017"
+    image: mongo:8.0
+    command: ["--wiredTigerCacheSizeGB", "0.25"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_ROOT_USER}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_ROOT_PASSWORD}"
+      MONGO_INITDB_DATABASE: todo-app
+      MONGO_APP_USER: "${MONGO_APP_USER}"
+      MONGO_APP_PASSWORD: "${MONGO_APP_PASSWORD}"
+    volumes:
+      - mongo-data:/data/db
+      - ./banco-de-dados/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+      - ./banco-de-dados/seed.json:/docker-entrypoint-initdb.d/seed.json:ro
     networks:
       - todo-net
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=root
-      - MONGO_INITDB_ROOT_PASSWORD=rootpassword
-      - MONGO_INITDB_DATABASE=todo-app
-
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
 networks:
   todo-net:
     driver: bridge
+
+volumes:
+  mongo-data:

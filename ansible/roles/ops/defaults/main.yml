@@ -1,0 +1,6 @@
+---
+ops_action: health
+ops_actions_allowed: [health, logs, restart-app, restart-db, recreate-db, backup, restore-test, reset-demo-list, restore-latest]
+ops_actions_destructive: [reset-demo-list, restore-latest]
+ops_log_lines: 100
+ops_app_containers: [caddy, frontend, backend]

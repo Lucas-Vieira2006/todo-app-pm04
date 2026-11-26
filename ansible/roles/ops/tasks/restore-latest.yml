@@ -1,0 +1,11 @@
+---
+- name: Executar todo-restore --yes
+  ansible.builtin.command: /usr/local/sbin/todo-restore --yes
+  register: ops_script
+  when: inventory_hostname in groups['db']
+  changed_when: true
+
+- name: Exibir saída
+  ansible.builtin.debug:
+    msg: "{{ ops_script.stdout_lines }}"
+  when: inventory_hostname in groups['db']

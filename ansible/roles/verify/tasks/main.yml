@@ -1,0 +1,78 @@
+---
+# Verificações finais (não alteram o servidor). Executadas ao final de cada deploy.
+- name: Coletar estado dos contêineres esperados
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  register: verify_containers
+  loop: "{{ verify_expected_containers }}"
+
+- name: Conferir que os contêineres estão em execução e saudáveis
+  ansible.builtin.assert:
+    that:
+      - item.exists
+      - item.container.State.Running
+      - item.container.State.Health.Status == 'healthy'
+      - item.container.HostConfig.RestartPolicy.Name == 'unless-stopped'
+    fail_msg: "Contêiner {{ item.item }} não está saudável; veja: docker logs {{ item.item }}"
+    success_msg: "{{ item.item }}: em execução, saudável, reinício automático ({{ item.container.Config.Image }})"
+  loop: "{{ verify_containers.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Conferir que o Docker inicia com a VM
+  ansible.builtin.systemd_service:
+    name: docker
+  register: verify_docker_unit
+  failed_when: verify_docker_unit.status.UnitFileState != 'enabled'
+
+- name: Verificações da VM do banco
+  when: inventory_hostname in groups['db']
+  block:
+    - name: Conferir que o volume persistente está montado
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.mounts | selectattr('mount', 'equalto', mongo_data_dir) | list | length == 1
+        fail_msg: "Volume de dados não montado em {{ mongo_data_dir }}"
+        success_msg: "Volume persistente montado em {{ mongo_data_dir }}"
+
+    - name: Conferir que existe backup agendado
+      ansible.builtin.command: crontab -l
+      register: verify_cron
+      changed_when: false
+      failed_when: "'todo-backup' not in verify_cron.stdout"
+
+- name: Verificações da VM da aplicação
+  when: inventory_hostname in groups['app']
+  block:
+    - name: Conferir que a API alcança o MongoDB pela rede privada
+      ansible.builtin.wait_for:
+        host: "{{ db_private_ip }}"
+        port: 27017
+        timeout: 10
+
+    - name: Conferir o NAT da sub-rede privada
+      ansible.builtin.command: iptables -t nat -C POSTROUTING -s {{ private_subnet_cidr }} -j MASQUERADE -o {{ ansible_facts.default_ipv4.interface }}
+      changed_when: false
+
+    - name: Página inicial pelo endereço público HTTPS
+      ansible.builtin.uri:
+        url: "https://{{ app_domain }}/"
+        return_content: true
+      register: verify_home
+      until: verify_home.status == 200
+      retries: 20
+      delay: 6
+      delegate_to: localhost
+      become: false
+
+    - name: Fluxo completo da API pelo endereço público (cria, conclui, reabre e exclui uma tarefa de teste)
+      ansible.builtin.include_tasks: smoke.yml
+
+    - name: Conferir que a porta do MongoDB não responde pelo IP público
+      ansible.builtin.wait_for:
+        host: "{{ app_public_ip }}"
+        port: 27017
+        state: stopped
+        timeout: 5
+      delegate_to: localhost
+      become: false

@@ -1,0 +1,39 @@
+digraph arquitetura {
+  graph [rankdir=LR, fontname="DejaVu Sans", fontsize=11, nodesep=0.35, ranksep=0.55, pad=0.2, bgcolor="white"];
+  node  [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=10, fillcolor="#ffffff", color="#555555"];
+  edge  [fontname="DejaVu Sans", fontsize=9, color="#444444"];
+
+  visitantes [label="Visitantes\n(navegador em outro\ndispositivo)", fillcolor="#eef3fb"];
+  gha [label="GitHub Actions\ninfra / app / ops / destroy\n(OIDC, sem chaves AWS)", fillcolor="#f3eefb"];
+  ghcr [label="GHCR\nimagens sha-<commit>", fillcolor="#f3eefb"];
+
+  subgraph cluster_aws {
+    label="AWS us-east-1"; style="rounded"; color="#999999"; fontname="DejaVu Sans";
+    subgraph cluster_vpc {
+      label="VPC 10.20.0.0/16 (ambiente dev)"; style="rounded,dashed"; color="#777777";
+      subgraph cluster_pub {
+        label="Sub-rede pública 10.20.1.0/24"; style="rounded,filled"; fillcolor="#f4fbf4"; color="#88aa88";
+        app [label="VM 1 - aplicação (t3.micro)\nElastic IP\n\nCaddy :80/:443 (Let's Encrypt)\nNginx + React  (/todos -> API)\nAPI Node.js/Express\nNAT da sub-rede privada", fillcolor="#ffffff"];
+      }
+      subgraph cluster_priv {
+        label="Sub-rede privada 10.20.2.0/24 (sem IP público)"; style="rounded,filled"; fillcolor="#fbf6ee"; color="#bb9966";
+        db [label="VM 2 - banco (t3.micro)\n\nMongoDB 8.0 (contêiner)\nusuário todo_app (readWrite)\nbackup diário (cron)", fillcolor="#ffffff"];
+        ebs [label="EBS gp3 10 GB\n/srv/mongo-data\n(criptografado)", shape=cylinder, fillcolor="#ffffff"];
+      }
+      s3ep [label="Endpoint S3\n(gateway)", shape=ellipse, fillcolor="#ffffff"];
+    }
+    s3state [label="S3 Terraform State\nversionado, lock nativo", shape=cylinder, fillcolor="#fff8e6"];
+    s3bkp [label="S3 backups\nretenção 30 dias", shape=cylinder, fillcolor="#fff8e6"];
+  }
+
+  visitantes -> app [label="HTTPS 443"];
+  app -> db [label="TCP 27017\nsó SG da app"];
+  db -> ebs [dir=none];
+  db -> app [label="saída via NAT\n(apt, imagens)", style=dashed];
+  db -> s3ep -> s3bkp [label=""];
+  gha -> s3state [label="terraform init/plan/apply"];
+  gha -> app [label="SSH temporário\n(IP do runner)", style=dashed];
+  app -> db [label="SSH via bastion", style=dotted];
+  gha -> ghcr [label="build/push"];
+  app -> ghcr [label="pull", style=dashed, dir=back];
+}

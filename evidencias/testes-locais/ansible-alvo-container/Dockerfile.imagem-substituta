@@ -1,0 +1,8 @@
+# Imagem SUBSTITUTA para teste local dos roles de contêiner (sem acesso ao Docker Hub/GHCR).
+# Não executa a aplicação: aceita quaisquer argumentos e responde aos healthchecks dos roles.
+FROM local/ubuntu-noble-systemd:test
+RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/wget \
+ && printf '#!/bin/sh\necho 3\n' > /usr/local/bin/mongosh \
+ && printf '#!/bin/sh\nexec sleep infinity\n' > /standin.sh \
+ && chmod +x /usr/local/bin/wget /usr/local/bin/mongosh /standin.sh
+ENTRYPOINT ["/standin.sh"]

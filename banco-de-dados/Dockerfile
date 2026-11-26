@@ -1,8 +1,6 @@
+FROM mongo:8.0
 
-FROM mongo:latest
-
-
-COPY ./init-mongo.js /docker-entrypoint-initdb.d/
-
+# Script de criação do usuário da aplicação e dados iniciais
+COPY ./init-mongo.js ./seed.json /docker-entrypoint-initdb.d/
 
 EXPOSE 27017

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Restaura um backup no banco PRINCIPAL (substitui a coleção atual). Exige --yes.
+set -euo pipefail
+
+[ "${1:-}" = "--yes" ] || { echo "uso: todo-restore --yes [nome-do-backup]"; exit 2; }
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+/usr/local/sbin/todo-backup   # backup de segurança antes de sobrescrever
+NAME="${2:-$(/usr/local/sbin/todo-s3 latest)}"
+echo "Restaurando $NAME no banco principal"
+/usr/local/sbin/todo-s3 get "$NAME" "$WORK/backup.archive.gz"
+docker cp "$WORK/backup.archive.gz" "{{ mongo_container_name }}:/tmp/restore.archive.gz"
+docker exec "{{ mongo_container_name }}" mongorestore --quiet --drop \
+  --username "{{ mongo_root_user }}" --authenticationDatabase admin \
+  --config /run/secrets/todo/mongotools.yaml \
+  --nsInclude "{{ mongo_database }}.*" --archive=/tmp/restore.archive.gz --gzip
+docker exec "{{ mongo_container_name }}" rm -f /tmp/restore.archive.gz
+echo "Restauração concluída."

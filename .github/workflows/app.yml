@@ -1,0 +1,115 @@
+name: "App: validar e construir imagens"
+
+# Fluxo de entrega da aplicação: valida o código, constrói as imagens e publica no GHCR
+# com tag identificável (sha-<commit>). A implantação usa essa tag na pipeline Infra.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validar código
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Backend - instalar dependências e checar sintaxe
+        working-directory: backend
+        run: |
+          npm ci --omit=dev
+          node --check index.js
+
+      - name: Frontend - instalar dependências e compilar
+        working-directory: frontend
+        env:
+          CI: "true" # avisos de lint interrompem o build
+        run: |
+          npm ci
+          npm run build
+
+  build:
+    name: Imagem ${{ matrix.component }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [frontend, backend]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Nome da imagem em minúsculas
+        id: name
+        env:
+          OWNER: ${{ github.repository_owner }}
+          COMPONENT: ${{ matrix.component }}
+        run: echo "image=ghcr.io/${OWNER,,}/todo-app-${COMPONENT}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags e labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+
+      - name: Construir e publicar
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.component }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+  summary:
+    name: Resumo
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Tag para implantar
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          tag="sha-${SHA::7}"
+          {
+            echo "## Imagens publicadas"
+            echo ""
+            echo "Tag: \`$tag\`"
+            echo ""
+            echo "Para implantar: execute **Infra: provisionar e configurar** com \`docker_tag=$tag\`."
+            echo "Para voltar à versão anterior: execute a mesma pipeline com a tag anterior"
+            echo "(registrada em /opt/todo-app/release.json e no resumo da última execução)."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,33 @@
+---
+# Volume EBS de dados criado pelo Terraform. Em instâncias Nitro ele aparece como NVMe,
+# com link estável em /dev/disk/by-id contendo o ID do volume.
+- name: Definir o caminho do dispositivo do volume de dados
+  ansible.builtin.set_fact:
+    data_volume_device: "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ db_data_volume_id | replace('-', '') }}"
+
+- name: Aguardar o volume de dados ficar disponível
+  ansible.builtin.wait_for:
+    path: "{{ data_volume_device }}"
+    timeout: 180
+
+- name: Criar sistema de arquivos (somente se o volume estiver vazio)
+  community.general.filesystem:
+    dev: "{{ data_volume_device }}"
+    fstype: ext4
+    force: false
+
+- name: Montar o volume em {{ mongo_data_dir }}
+  ansible.posix.mount:
+    path: "{{ mongo_data_dir }}"
+    src: "{{ data_volume_device }}"
+    fstype: ext4
+    opts: defaults,nofail,noatime
+    state: mounted
+
+- name: Ajustar dono do diretório de dados para o usuário do MongoDB no contêiner
+  ansible.builtin.file:
+    path: "{{ mongo_data_dir }}"
+    state: directory
+    owner: "{{ mongo_uid }}"
+    group: "{{ mongo_uid }}"
+    mode: "0750"

@@ -7,16 +7,24 @@ const bodyParser = require('body-parser');
 const app = express();
 const port = 5000;
 
-// Conexão com o MongoDB (com autenticação)
-mongoose.connect('mongodb://root:rootpassword@mongo-todo:27017/todo-app?authSource=admin', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-  .then(() => console.log('Conectado ao MongoDB'))
-  .catch((err) => console.error('Erro ao conectar ao MongoDB:', err));
+// Conexão com o MongoDB: a string de conexão vem do ambiente (sem credenciais no código)
+const mongoUri = process.env.MONGO_URI;
+if (!mongoUri) {
+  console.error('Variável MONGO_URI não definida');
+  process.exit(1);
+}
 
-// Middleware para habilitar CORS e processar JSON
-app.use(cors());
+mongoose.connect(mongoUri)
+  .then(() => console.log('Conectado ao MongoDB'))
+  .catch((err) => {
+    // Sem a primeira conexão a API não funciona: encerra para o Docker reiniciar o contêiner
+    console.error('Erro ao conectar ao MongoDB:', err.message);
+    process.exit(1);
+  });
+
+// CORS: lista de origens permitidas em CORS_ORIGIN (separadas por vírgula); sem a variável, libera todas
+const corsOrigin = process.env.CORS_ORIGIN;
+app.use(cors(corsOrigin ? { origin: corsOrigin.split(',') } : undefined));
 app.use(bodyParser.json());
 
 // Definindo o modelo de Tarefa (To-do)

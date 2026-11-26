@@ -1,0 +1,44 @@
+---
+- name: Listar tarefas (GET /todos)
+  ansible.builtin.uri:
+    url: "https://{{ app_domain }}/todos"
+    return_content: true
+  register: verify_list
+  delegate_to: localhost
+  become: false
+
+- name: Criar tarefa de teste (POST /todos)
+  ansible.builtin.uri:
+    url: "https://{{ app_domain }}/todos"
+    method: POST
+    body_format: json
+    body:
+      text: "verificacao-pipeline {{ verify_run_id }}"
+    status_code: 201
+  register: verify_created
+  delegate_to: localhost
+  become: false
+
+- name: Concluir e reabrir a tarefa (PATCH /todos/:id duas vezes)
+  ansible.builtin.uri:
+    url: "https://{{ app_domain }}/todos/{{ verify_created.json._id }}"
+    method: PATCH
+  register: verify_toggle
+  loop: [1, 2]
+  delegate_to: localhost
+  become: false
+
+- name: Excluir a tarefa de teste (DELETE /todos/:id)
+  ansible.builtin.uri:
+    url: "https://{{ app_domain }}/todos/{{ verify_created.json._id }}"
+    method: DELETE
+  delegate_to: localhost
+  become: false
+
+- name: Conferir o resultado do fluxo
+  ansible.builtin.assert:
+    that:
+      - verify_list.json is sequence
+      - verify_toggle.results[0].json.completed == true
+      - verify_toggle.results[1].json.completed == false
+    success_msg: "API pública OK: {{ verify_list.json | length }} tarefa(s) na lista; criar, concluir, reabrir e excluir funcionaram"

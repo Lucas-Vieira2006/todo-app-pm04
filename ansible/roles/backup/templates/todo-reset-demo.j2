@@ -1,0 +1,15 @@
+#!/bin/bash
+# Prepara uma lista nova para a apresentação: apaga todas as tarefas e recarrega os
+# dados de demonstração (seed.json). Faz backup antes. Exige --yes.
+set -euo pipefail
+
+[ "${1:-}" = "--yes" ] || { echo "uso: todo-reset-demo --yes"; exit 2; }
+/usr/local/sbin/todo-backup
+docker exec "{{ mongo_container_name }}" sh -c \
+  'mongosh --quiet -u {{ mongo_root_user }} -p "$(cat /run/secrets/todo/root_password)" --authenticationDatabase admin --eval "
+     const seed = JSON.parse(require(\"fs\").readFileSync(\"/docker-entrypoint-initdb.d/seed.json\", \"utf8\"));
+     const t = db.getSiblingDB(\"{{ mongo_database }}\").todos;
+     const removed = t.deleteMany({}).deletedCount;
+     t.insertMany(seed);
+     print(\"Tarefas removidas: \" + removed + \" | tarefas de demonstração carregadas: \" + seed.length);
+   "'

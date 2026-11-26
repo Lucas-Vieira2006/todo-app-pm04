@@ -1,0 +1,8 @@
+---
+# Remove e recria o contêiner do banco mantendo o volume EBS (teste de persistência ACE-05)
+- name: Recriar o contêiner do MongoDB com o mesmo volume de dados
+  ansible.builtin.include_role:
+    name: mongodb
+  vars:
+    mongodb_force_recreate: true
+  when: inventory_hostname in groups['db']

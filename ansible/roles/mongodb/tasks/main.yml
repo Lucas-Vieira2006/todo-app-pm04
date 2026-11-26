@@ -1,0 +1,106 @@
+---
+- name: Validar segredos do banco
+  ansible.builtin.assert:
+    that:
+      - mongo_root_password | length >= 16
+      - mongo_app_password | length >= 16
+    fail_msg: "Defina MONGO_ROOT_PASSWORD e MONGO_APP_PASSWORD (mínimo de 16 caracteres) nos GitHub Secrets do ambiente."
+    quiet: true
+  no_log: true
+
+- name: Criar diretórios do banco
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ db_base_dir }}", owner: root, mode: "0755" }
+    - { path: "{{ db_base_dir }}/init", owner: root, mode: "0755" }
+    - { path: "{{ db_base_dir }}/secrets", owner: "{{ mongo_uid }}", mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Copiar script de inicialização e dados de demonstração do repositório
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../banco-de-dados/{{ item }}"
+    dest: "{{ db_base_dir }}/init/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - init-mongo.js
+    - seed.json
+
+- name: Gravar segredos em arquivos lidos pelo contêiner (fora das variáveis de ambiente)
+  ansible.builtin.copy:
+    dest: "{{ db_base_dir }}/secrets/{{ item.name }}"
+    content: "{{ item.content }}"
+    owner: "{{ mongo_uid }}"
+    group: "{{ mongo_uid }}"
+    mode: "0400"
+  loop:
+    - { name: root_password, content: "{{ mongo_root_password }}" }
+    - { name: app_user, content: "{{ mongo_app_user }}" }
+    - { name: app_password, content: "{{ mongo_app_password }}" }
+    - { name: mongotools.yaml, content: "password: {{ mongo_root_password | to_json }}\n" }
+  no_log: true
+
+- name: Criar e manter o contêiner do MongoDB
+  community.docker.docker_container:
+    name: "{{ mongo_container_name }}"
+    image: "{{ mongo_image }}"
+    pull: missing
+    restart_policy: unless-stopped
+    command: ["--wiredTigerCacheSizeGB", "0.25"]
+    # Publicado somente no IP privado; o Security Group aceita apenas a VM da aplicação
+    published_ports:
+      - "{{ db_private_ip }}:27017:27017"
+    env:
+      MONGO_INITDB_ROOT_USERNAME: "{{ mongo_root_user }}"
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/todo/root_password
+      MONGO_INITDB_DATABASE: "{{ mongo_database }}"
+      MONGO_APP_USER_FILE: /run/secrets/todo/app_user
+      MONGO_APP_PASSWORD_FILE: /run/secrets/todo/app_password
+    mounts:
+      - { type: bind, source: "{{ mongo_data_dir }}", target: /data/db }
+      - { type: bind, source: "{{ db_base_dir }}/init", target: /docker-entrypoint-initdb.d, read_only: true }
+      - { type: bind, source: "{{ db_base_dir }}/secrets", target: /run/secrets/todo, read_only: true }
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    state: started
+    recreate: "{{ mongodb_force_recreate | default(false) | bool }}"
+
+- name: Aguardar o MongoDB ficar saudável
+  community.docker.docker_container_info:
+    name: "{{ mongo_container_name }}"
+  register: mongodb_info
+  until: mongodb_info.container.State.Health.Status | default('') == 'healthy'
+  retries: 30
+  delay: 5
+
+- name: Verificar a credencial própria da aplicação no banco
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ mongo_container_name }}"
+      - sh
+      - -c
+      - >-
+        mongosh --quiet "mongodb://127.0.0.1:27017/{{ mongo_database }}?authSource={{ mongo_database }}"
+        -u "$(cat /run/secrets/todo/app_user)" -p "$(cat /run/secrets/todo/app_password)"
+        --eval 'db.todos.countDocuments()'
+  register: mongodb_app_check
+  changed_when: false
+  failed_when: mongodb_app_check.rc != 0
+  no_log: true
+
+- name: Exibir quantidade de tarefas no banco
+  ansible.builtin.debug:
+    msg: "MongoDB saudável; usuário {{ mongo_app_user }} autenticado; tarefas no banco: {{ mongodb_app_check.stdout | trim }}"

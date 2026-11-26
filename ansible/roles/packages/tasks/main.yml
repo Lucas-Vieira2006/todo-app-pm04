@@ -1,0 +1,14 @@
+---
+- name: Validar a lista de pacotes adicionais
+  ansible.builtin.assert:
+    that:
+      - extra_packages is sequence
+      - extra_packages is not string
+      - extra_packages | select('match', '^[a-z0-9][a-z0-9+.-]*$') | list | length == extra_packages | length
+    fail_msg: "extra_packages deve ser uma lista de nomes de pacotes apt válidos: {{ extra_packages }}"
+    quiet: true
+
+- name: Instalar pacotes base e pacotes adicionais da pipeline
+  ansible.builtin.apt:
+    name: "{{ base_packages + extra_packages }}"
+    state: present

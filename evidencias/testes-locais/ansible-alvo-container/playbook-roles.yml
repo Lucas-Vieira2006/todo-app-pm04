@@ -1,0 +1,11 @@
+---
+# Executa os roles de sistema do projeto contra os contêineres de teste (mesma ordem do playbook.yml).
+- name: Alvo app - sistema, pacotes, Docker e NAT
+  hosts: app
+  become: true
+  roles: [os_updates, packages, system, docker, nat_gateway]
+
+- name: Alvo db - sistema, pacotes, Docker e volume persistente
+  hosts: db
+  become: true
+  roles: [os_updates, packages, system, docker, data_volume]

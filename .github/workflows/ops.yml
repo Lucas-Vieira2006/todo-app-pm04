@@ -1,0 +1,130 @@
+name: "Ops: rotinas operacionais"
+
+# Rotinas para os alunos antes e durante a feira, sem acesso manual aos servidores.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Ambiente"
+        type: choice
+        options: [dev, homolog, prod]
+        default: dev
+      action:
+        description: "Rotina"
+        type: choice
+        options:
+          - health # consulta de saúde
+          - logs # logs dos contêineres
+          - restart-app # reinicia Caddy, frontend e API
+          - restart-db # reinicia o MongoDB
+          - recreate-db # recria o contêiner do banco mantendo o volume (teste de persistência)
+          - backup # backup imediato (local + S3)
+          - restore-test # restaura o último backup em contêiner isolado
+          - reset-demo-list # apaga a lista e recarrega os dados de demonstração (destrutiva)
+          - restore-latest # restaura o último backup no banco principal (destrutiva)
+        default: health
+      confirm:
+        description: "Para rotinas destrutivas digite CONFIRMAR"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infra-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    name: ${{ inputs.action }} (${{ inputs.environment }})
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      OPS_ACTION: ${{ inputs.action }}
+      OPS_CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validar confirmação
+        run: |
+          case "$OPS_ACTION" in
+            reset-demo-list|restore-latest)
+              [[ "$OPS_CONFIRM" == "CONFIRMAR" ]] || { echo "::error::Rotina destrutiva: informe confirm=CONFIRMAR"; exit 1; } ;;
+          esac
+
+      - name: Preparar ferramentas
+        uses: ./.github/actions/setup-tools
+
+      - name: Credenciais AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: ops-${{ inputs.environment }}-${{ github.run_id }}
+
+      - name: Ler dados do ambiente no Terraform State
+        working-directory: terraform
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=todo-app/$DEPLOY_ENV/terraform.tfstate" \
+            -backend-config="region=$AWS_REGION"
+          terraform output -json > "$RUNNER_TEMP/tf-outputs.json"
+          jq -e '.app_public_ip.value' "$RUNNER_TEMP/tf-outputs.json" >/dev/null \
+            || { echo "::error::Ambiente $DEPLOY_ENV não provisionado"; exit 1; }
+          echo "APP_SG=$(jq -r .app_security_group_id.value "$RUNNER_TEMP/tf-outputs.json")" >> "$GITHUB_ENV"
+
+      - name: Inventário e acesso SSH temporário
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/todo_deploy)
+          scripts/render-inventory.sh "$RUNNER_TEMP/tf-outputs.json" ansible/inventory/hosts.yml ~/.ssh/todo_deploy
+          scripts/ssh-access.sh open "$APP_SG"
+
+      - name: Executar rotina
+        working-directory: ansible
+        env:
+          MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+          MONGO_APP_PASSWORD: ${{ secrets.MONGO_APP_PASSWORD }}
+        run: |
+          ansible-playbook ops.yml -e "deploy_env=$DEPLOY_ENV" -e "ops_action=$OPS_ACTION" -e "ops_confirm=$OPS_CONFIRM" \
+            2>&1 | tee "$RUNNER_TEMP/ops.log"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Resumo
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Rotina \`$OPS_ACTION\` em \`$DEPLOY_ENV\`: ${{ job.status }}"
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/ops.log" 2>/dev/null | grep -E '"msg"|msg:|^ +- |ok=' | tail -60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fechar acesso SSH temporário
+        if: ${{ always() && env.APP_SG != '' }}
+        run: scripts/ssh-access.sh close "$APP_SG"
+
+      - name: Remover chave SSH do runner
+        if: ${{ always() }}
+        run: rm -f ~/.ssh/todo_deploy ansible/inventory/hosts.yml
+
+      - name: Publicar log da rotina
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: evidencias-ops-${{ inputs.action }}-${{ inputs.environment }}-${{ github.run_number }}
+          path: ${{ runner.temp }}/ops.log
+          retention-days: 30

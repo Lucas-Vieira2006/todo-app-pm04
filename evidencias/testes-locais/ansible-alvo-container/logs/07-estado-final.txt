@@ -1,0 +1,18 @@
+### Estado final dos alvos (2026-11-24T21:46:53-03:00)
+== pm04-app
+frontend	ghcr.io/teste/todo-app-frontend:sha-bbbbbbb	Up 23 seconds (healthy)
+backend	ghcr.io/teste/todo-app-backend:sha-bbbbbbb	Up 35 seconds (healthy)
+caddy	caddy:2.11-alpine	Up 2 minutes (healthy)
+enabled
+{
+    "current_tag": "sha-bbbbbbb",
+    "image_prefix": "ghcr.io/teste/todo-app",
+    "previous_tag": "sha-aaaaaaa"
+}
+-A POSTROUTING -s 10.20.2.0/24 -o eth0 -j MASQUERADE
+== pm04-db
+todo-mongo	mongo:8.0	Up 3 minutes (healthy)
+enabled
+/dev/loop0 ext4
+#Ansible: todo-app backup diario
+15 3 * * * /usr/local/sbin/todo-backup >> /var/log/todo-backup.log 2>&1

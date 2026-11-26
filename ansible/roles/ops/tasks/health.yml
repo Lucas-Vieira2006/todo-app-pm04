@@ -1,0 +1,42 @@
+---
+- name: Estado dos contêineres
+  ansible.builtin.command: docker ps --all --format 'table {{ "{{" }}.Names{{ "}}" }}\t{{ "{{" }}.Image{{ "}}" }}\t{{ "{{" }}.Status{{ "}}" }}'
+  register: ops_ps
+  changed_when: false
+
+- name: Uso de disco e memória
+  ansible.builtin.command: sh -c "df -h / {{ mongo_data_dir if inventory_hostname in groups['db'] else '' }}; free -m"
+  register: ops_resources
+  changed_when: false
+
+- name: Exibir saúde do host
+  ansible.builtin.debug:
+    msg: "{{ ops_ps.stdout_lines + [''] + ops_resources.stdout_lines }}"
+
+- name: Último backup local
+  ansible.builtin.shell: set -o pipefail && ls -1t {{ backup_dir }}/*.json 2>/dev/null | head -1 | xargs -r cat
+  args:
+    executable: /bin/bash
+  register: ops_last_backup
+  changed_when: false
+  failed_when: false
+  when: inventory_hostname in groups['db']
+
+- name: Exibir último backup
+  ansible.builtin.debug:
+    msg: "{{ ops_last_backup.stdout | default('nenhum backup local') }}"
+  when: inventory_hostname in groups['db']
+
+- name: Consultar a API pelo endereço público
+  ansible.builtin.uri:
+    url: "https://{{ app_domain }}/todos"
+    return_content: true
+  register: ops_api
+  delegate_to: localhost
+  become: false
+  when: inventory_hostname in groups['app']
+
+- name: Exibir resultado da API
+  ansible.builtin.debug:
+    msg: "API respondeu {{ ops_api.status }} com {{ ops_api.json | length }} tarefa(s): {{ ops_api.json | map(attribute='text') | list }}"
+  when: inventory_hostname in groups['app']

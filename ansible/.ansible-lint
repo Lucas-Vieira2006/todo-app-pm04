@@ -1,0 +1,7 @@
+---
+profile: production
+exclude_paths:
+  - inventory/hosts.yml
+skip_list:
+  # Os nomes das tarefas estão em português; a regra exige inicial maiúscula, já atendida
+  - name[template]

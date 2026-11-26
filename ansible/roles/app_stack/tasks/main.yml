@@ -1,0 +1,180 @@
+---
+- name: Validar parâmetros da aplicação
+  ansible.builtin.assert:
+    that:
+      - docker_tag | length > 0
+      - docker_image | length > 0
+      - mongo_app_password | length >= 16
+      - db_private_ip is match('^[0-9]+([.][0-9]+){3}$')
+    fail_msg: "Informe docker_image, docker_tag, MONGO_APP_PASSWORD e o IP privado do banco."
+    quiet: true
+  no_log: true
+
+- name: Criar diretórios da aplicação
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ app_base_dir }}"
+    - "{{ app_base_dir }}/caddy"
+
+- name: Configurar o Caddy (HTTPS automático com Let's Encrypt)
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ app_base_dir }}/caddy/Caddyfile"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar caddy
+
+- name: Criar a rede interna dos contêineres
+  community.docker.docker_network:
+    name: "{{ app_network }}"
+
+# --- Imagens: autentica no registro somente se faltar alguma imagem no host ------
+- name: Verificar imagens já presentes no host
+  community.docker.docker_image_info:
+    name:
+      - "{{ backend_image }}"
+      - "{{ frontend_image }}"
+  register: app_stack_images
+
+- name: Autenticar no registro de imagens
+  community.docker.docker_login:
+    registry_url: "{{ registry_url }}"
+    username: "{{ registry_username }}"
+    password: "{{ registry_password }}"
+  when:
+    - app_stack_images.images | length < 2
+    - registry_password | length > 0
+  no_log: true
+
+- name: Baixar as imagens da versão solicitada
+  community.docker.docker_image_pull:
+    name: "{{ item }}"
+    pull: not_present
+  loop:
+    - "{{ backend_image }}"
+    - "{{ frontend_image }}"
+
+- name: Encerrar a sessão no registro de imagens
+  community.docker.docker_login:
+    registry_url: "{{ registry_url }}"
+    state: absent
+  when:
+    - app_stack_images.images | length < 2
+    - registry_password | length > 0
+
+# --- Contêineres -----------------------------------------------------------------
+- name: Criar e manter o contêiner da API
+  community.docker.docker_container:
+    name: backend
+    image: "{{ backend_image }}"
+    pull: missing
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ app_network }}"
+    env:
+      NODE_ENV: production
+      MONGO_URI: >-
+        {{ 'mongodb://' ~ mongo_app_user ~ ':' ~ (mongo_app_password | urlencode | replace('/', '%2F')) ~ '@' ~ db_private_ip
+           ~ ':27017/' ~ mongo_database ~ '?authSource=' ~ mongo_database }}
+      CORS_ORIGIN: "https://{{ app_domain }}"
+    healthcheck:
+      # GET /todos só responde 200 com a API conectada ao MongoDB
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/todos"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    state: started
+  no_log: true
+
+- name: Criar e manter o contêiner do frontend (Nginx)
+  community.docker.docker_container:
+    name: frontend
+    image: "{{ frontend_image }}"
+    pull: missing
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ app_network }}"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    state: started
+
+- name: Criar e manter o contêiner do Caddy (entrada pública 80/443)
+  community.docker.docker_container:
+    name: caddy
+    image: "{{ caddy_image }}"
+    pull: missing
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ app_network }}"
+    published_ports:
+      - "80:80"
+      - "443:443"
+    mounts:
+      - { type: bind, source: "{{ app_base_dir }}/caddy/Caddyfile", target: /etc/caddy/Caddyfile, read_only: true }
+      - { type: volume, source: caddy_data, target: /data }
+      - { type: volume, source: caddy_config, target: /config }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    state: started
+
+- name: Aplicar alteração pendente do Caddyfile
+  ansible.builtin.meta: flush_handlers
+
+- name: Aguardar os contêineres ficarem saudáveis
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  register: app_stack_health
+  until: app_stack_health.container.State.Health.Status | default('') == 'healthy'
+  retries: 24
+  delay: 5
+  loop:
+    - backend
+    - frontend
+    - caddy
+
+# --- Registro da versão implantada (apoio ao retorno à versão anterior) ----------
+- name: Ler registro da versão anterior
+  ansible.builtin.slurp:
+    src: "{{ app_base_dir }}/release.json"
+  register: app_stack_release_file
+  failed_when: false
+
+- name: Calcular versões atual e anterior
+  ansible.builtin.set_fact:
+    app_stack_release_prev: "{{ (app_stack_release_file.content | b64decode | from_json) if app_stack_release_file.content is defined else {} }}"
+
+- name: Gravar registro da versão implantada
+  ansible.builtin.copy:
+    dest: "{{ app_base_dir }}/release.json"
+    content: "{{ release | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    release:
+      current_tag: "{{ docker_tag }}"
+      # Reexecução com a mesma tag preserva a anterior; tag nova empurra a atual para "anterior"
+      previous_tag: >-
+        {{ app_stack_release_prev.previous_tag | default('')
+           if app_stack_release_prev.current_tag | default('') == docker_tag
+           else app_stack_release_prev.current_tag | default('') }}
+      image_prefix: "{{ docker_image }}"
+
+- name: Remover imagens sem tag (mantém a versão anterior para rollback)
+  community.docker.docker_prune:
+    images: true
+    images_filters:
+      dangling: true

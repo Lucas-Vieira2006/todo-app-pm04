@@ -1,0 +1,15 @@
+# Gerenciado pelo Ansible (todo-app)
+[Unit]
+Description=NAT da sub-rede privada do todo-app
+Wants=network-online.target
+After=network-online.target docker.service
+# Reaplica as regras sempre que o Docker reiniciar
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/todo-nat.sh
+
+[Install]
+WantedBy=multi-user.target docker.service

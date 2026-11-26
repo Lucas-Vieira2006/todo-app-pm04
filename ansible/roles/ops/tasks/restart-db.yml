@@ -1,0 +1,16 @@
+---
+- name: Reiniciar contêiner do MongoDB
+  community.docker.docker_container:
+    name: "{{ mongo_container_name }}"
+    state: started
+    restart: true
+  when: inventory_hostname in groups['db']
+
+- name: Aguardar MongoDB saudável
+  community.docker.docker_container_info:
+    name: "{{ mongo_container_name }}"
+  register: ops_db_health
+  until: ops_db_health.container.State.Health.Status | default('') == 'healthy'
+  retries: 30
+  delay: 5
+  when: inventory_hostname in groups['db']

@@ -1,0 +1,52 @@
+---
+project_name: todo-app
+
+# --- Parâmetros da pipeline (sobrescritos por -e @pipeline-vars.json) -------------
+deploy_env: dev
+docker_image: ghcr.io/example/todo-app # prefixo: <prefixo>-frontend e <prefixo>-backend
+docker_tag: ""
+update_os: false
+extra_packages: []
+
+# Reinicia a VM após update_os somente se o Ubuntu indicar necessidade
+reboot_if_required: true
+
+# --- Pacotes ---------------------------------------------------------------------
+base_packages:
+  - ca-certificates
+  - curl
+  - jq
+  - netcat-openbsd
+  - dnsutils
+  - python3-requests
+  - cron
+
+timezone: America/Sao_Paulo
+swap_size_mb: 1024
+
+# --- Imagens de terceiros (tags explícitas) --------------------------------------
+mongo_image: mongo:8.0
+caddy_image: caddy:2.11-alpine
+
+# --- Banco ------------------------------------------------------------------------
+mongo_database: todo-app
+mongo_root_user: root
+mongo_app_user: todo_app
+mongo_container_name: todo-mongo
+mongo_data_dir: /srv/mongo-data
+mongo_uid: 999
+
+# Segredos lidos do ambiente do runner (GitHub Secrets); nunca gravados no repositório
+mongo_root_password: "{{ lookup('ansible.builtin.env', 'MONGO_ROOT_PASSWORD') }}"
+mongo_app_password: "{{ lookup('ansible.builtin.env', 'MONGO_APP_PASSWORD') }}"
+
+# --- Registro de imagens (GHCR); usado só quando falta imagem no host ------------
+registry_url: ghcr.io
+registry_username: "{{ lookup('ansible.builtin.env', 'REGISTRY_USERNAME') }}"
+registry_password: "{{ lookup('ansible.builtin.env', 'REGISTRY_PASSWORD') }}"
+
+# --- Backups ------------------------------------------------------------------------
+backup_dir: /srv/backups
+backup_local_keep: 7
+backup_cron_hour: "3"
+backup_cron_minute: "15"

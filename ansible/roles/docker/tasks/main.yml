@@ -1,0 +1,35 @@
+---
+# Docker do repositório oficial do Ubuntu: atualizado junto com o sistema pelo update_os.
+- name: Instalar Docker
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - python3-requests
+    state: present
+
+- name: Configurar o daemon do Docker (rotação de logs e live-restore)
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reiniciar docker
+
+- name: Habilitar e iniciar o Docker na inicialização da VM
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Aplicar configuração pendente do Docker antes de criar contêineres
+  ansible.builtin.meta: flush_handlers
+
+- name: Consultar versão do Docker
+  ansible.builtin.command: docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}'
+  register: docker_server_version
+  changed_when: false
+
+- name: Exibir versão do Docker
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: Docker {{ docker_server_version.stdout }}"

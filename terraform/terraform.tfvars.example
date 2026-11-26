@@ -1,0 +1,13 @@
+# Exemplo para execução local (a pipeline informa estes valores por TF_VAR_*).
+# Nunca coloque credenciais neste arquivo.
+environment         = "dev"
+instance_name       = "vm-pm04"
+instance_type       = "t3.micro"
+db_instance_type    = "t3.micro"
+ssh_public_key      = "ssh-ed25519 AAAA... deploy@todo-app"
+backup_bucket_name  = "todo-app-backups-123456789012"
+admin_cidrs         = []
+app_domain          = ""
+vpc_cidr            = "10.20.0.0/16"
+public_subnet_cidr  = "10.20.1.0/24"
+private_subnet_cidr = "10.20.2.0/24"

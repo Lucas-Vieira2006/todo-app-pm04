@@ -1,0 +1,6 @@
+# Copie para terraform.tfvars e ajuste. Este arquivo não contém credenciais.
+aws_region           = "us-east-1"
+project              = "todo-app"
+github_repository    = "seu-usuario/todo-app"
+environments         = ["dev", "homolog", "prod"]
+create_oidc_provider = true

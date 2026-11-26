@@ -1,0 +1,16 @@
+#!/bin/sh
+# Gerenciado pelo Ansible (todo-app). Regras idempotentes: só adiciona o que não existe.
+set -eu
+
+SRC="{{ private_subnet_cidr }}"
+IFACE="$(ip -o -4 route show to default | awk '{print $5; exit}')"
+
+iptables -t nat -C POSTROUTING -s "$SRC" -o "$IFACE" -j MASQUERADE 2>/dev/null \
+  || iptables -t nat -A POSTROUTING -s "$SRC" -o "$IFACE" -j MASQUERADE
+
+# O Docker muda a política da cadeia FORWARD para DROP; a cadeia DOCKER-USER é avaliada antes.
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -C DOCKER-USER -d "$SRC" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+  || iptables -I DOCKER-USER -d "$SRC" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+iptables -C DOCKER-USER -s "$SRC" -o "$IFACE" -j ACCEPT 2>/dev/null \
+  || iptables -I DOCKER-USER -s "$SRC" -o "$IFACE" -j ACCEPT

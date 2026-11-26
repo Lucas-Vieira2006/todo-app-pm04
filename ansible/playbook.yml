@@ -1,0 +1,82 @@
+---
+# Configuração completa do ambiente todo-app.
+# Executado pela pipeline após o Terraform: ansible-playbook playbook.yml -e @pipeline-vars.json
+
+- name: Validar parâmetros recebidos da pipeline
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Conferir parâmetros obrigatórios
+      ansible.builtin.assert:
+        that:
+          - deploy_env in ['dev', 'homolog', 'prod']
+          - docker_image is match('^[a-z0-9][a-z0-9._/-]+$')
+          - docker_tag is match('^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$')
+          - update_os | bool in [true, false]
+          - extra_packages is sequence and extra_packages is not string
+        fail_msg: "Parâmetros inválidos: env={{ deploy_env }} image={{ docker_image }} tag={{ docker_tag }} extra={{ extra_packages }}"
+        success_msg: "env={{ deploy_env }} imagem={{ docker_image }}:{{ docker_tag }} update_os={{ update_os }} extra_packages={{ extra_packages }}"
+
+- name: VM da aplicação - sistema, pacotes, Docker e NAT da sub-rede privada
+  hosts: app
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Aguardar a VM aceitar conexões
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Aguardar o fim do cloud-init (evita disputa pelo apt)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Coletar fatos
+      ansible.builtin.setup:
+  roles:
+    - os_updates
+    - packages
+    - system
+    - docker
+    - nat_gateway
+
+- name: VM do banco - sistema, pacotes, Docker, volume persistente, MongoDB e backups
+  hosts: db
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Aguardar a VM aceitar conexões (via VM da aplicação)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Aguardar o fim do cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: Coletar fatos
+      ansible.builtin.setup:
+
+    - name: Conferir saída para a internet pelo NAT da VM da aplicação
+      ansible.builtin.uri:
+        url: http://archive.ubuntu.com/ubuntu/dists/noble/Release
+        method: HEAD
+      register: db_nat_check
+      until: db_nat_check.status == 200
+      retries: 10
+      delay: 6
+  roles:
+    - os_updates
+    - packages
+    - system
+    - docker
+    - data_volume
+    - mongodb
+    - backup
+
+- name: VM da aplicação - contêineres (Caddy, frontend e API)
+  hosts: app
+  become: true
+  roles:
+    - app_stack

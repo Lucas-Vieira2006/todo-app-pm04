@@ -1,0 +1,35 @@
+#!/bin/bash
+# Backup do MongoDB: dump compactado no disco local e cópia no S3 (gerenciado pelo Ansible).
+set -euo pipefail
+
+CONTAINER="{{ mongo_container_name }}"
+DIR="{{ backup_dir }}"
+NAME="todo-$(date -u +%Y%m%dT%H%M%SZ)"
+FILE="$DIR/$NAME.archive.gz"
+
+echo "[$(date -Is)] Iniciando backup $NAME"
+
+docker exec "$CONTAINER" mongodump --quiet \
+  --username "{{ mongo_root_user }}" --authenticationDatabase admin \
+  --config /run/secrets/todo/mongotools.yaml \
+  --db "{{ mongo_database }}" --archive --gzip > "$FILE.tmp"
+mv "$FILE.tmp" "$FILE"
+
+COUNT="$(docker exec "$CONTAINER" sh -c \
+  'mongosh --quiet -u {{ mongo_root_user }} -p "$(cat /run/secrets/todo/root_password)" --authenticationDatabase admin \
+   --eval "db.getSiblingDB(\"{{ mongo_database }}\").todos.countDocuments()"')"
+SHA="$(sha256sum "$FILE" | cut -d' ' -f1)"
+
+cat > "$DIR/$NAME.json" <<JSON
+{"backup": "$NAME.archive.gz", "environment": "{{ deploy_env }}", "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "todos_count": $COUNT, "sha256": "$SHA"}
+JSON
+
+/usr/local/sbin/todo-s3 put "$FILE" "$NAME.archive.gz"
+/usr/local/sbin/todo-s3 put "$DIR/$NAME.json" "$NAME.json"
+
+# Mantém apenas os backups locais mais recentes; a retenção no S3 é definida pelo bucket
+ls -1t "$DIR"/todo-*.archive.gz | tail -n +$(({{ backup_local_keep }} + 1)) | while read -r old; do
+  rm -f "$old" "${old%.archive.gz}.json"
+done
+
+echo "[$(date -Is)] Backup concluído: $NAME ($COUNT tarefas, sha256 $SHA)"

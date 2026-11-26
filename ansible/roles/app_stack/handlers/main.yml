@@ -1,0 +1,6 @@
+---
+- name: Reiniciar caddy
+  community.docker.docker_container:
+    name: caddy
+    state: started
+    restart: true

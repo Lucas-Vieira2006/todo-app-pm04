@@ -1,0 +1,17 @@
+# Alvos de teste local: contêineres Ubuntu 24.04 com systemd (debootstrap), acessados pelo
+# plugin de conexão docker. Simulam as VMs app e db para executar os roles de sistema reais.
+all:
+  vars:
+    ansible_connection: community.docker.docker
+    deploy_env: dev
+    aws_region: us-east-1
+    private_subnet_cidr: 10.20.2.0/24
+    db_data_volume_id: vol-0abc123teste
+    swap_size_mb: 0 # swap não é permitido dentro de contêiner
+  children:
+    app:
+      hosts:
+        pm04-app:
+    db:
+      hosts:
+        pm04-db:

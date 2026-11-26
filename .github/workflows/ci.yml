@@ -1,0 +1,43 @@
+name: "CI: validar automação"
+
+# Validações estáticas em pull requests e pushes (sem acesso à AWS)
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "ansible/**"
+      - ".github/**"
+      - "scripts/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Preparar ferramentas
+        uses: ./.github/actions/setup-tools
+
+      - name: Terraform fmt, validate e testes (provider simulado)
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform test
+          cd bootstrap && terraform init -backend=false -input=false && terraform validate
+
+      - name: Ansible syntax-check e lint
+        working-directory: ansible
+        run: |
+          python -m pip install --quiet ansible-lint
+          ansible-playbook -i inventory/hosts.example.yml playbook.yml verify.yml ops.yml --syntax-check
+          ansible-lint
+
+      - name: Shellcheck dos scripts
+        run: shellcheck scripts/*.sh
