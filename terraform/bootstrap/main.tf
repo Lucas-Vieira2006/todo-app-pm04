@@ -4,6 +4,8 @@ locals {
   account_id         = data.aws_caller_identity.current.account_id
   state_bucket_name  = "${var.project}-tfstate-${local.account_id}"
   backup_bucket_name = "${var.project}-backups-${local.account_id}"
+  github_owner       = split("/", var.github_repository)[0]
+  github_repo        = split("/", var.github_repository)[1]
   oidc_provider_arn  = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
 }
 
@@ -176,11 +178,16 @@ data "aws_iam_policy_document" "github_trust" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
-    # Somente jobs que rodam nos GitHub Environments do repositório autorizado
+    # Somente jobs que rodam nos GitHub Environments do repositório autorizado.
+    # Aceita os dois formatos do "sub": o clássico (repo:dono/repo) e o imutável, usado por
+    # repositórios criados a partir de jul/2026 (repo:dono@<id>/repo@<id>).
     condition {
-      test     = "StringEquals"
+      test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for env in var.environments : "repo:${var.github_repository}:environment:${env}"]
+      values = flatten([for env in var.environments : [
+        "repo:${local.github_owner}/${local.github_repo}:environment:${env}",
+        "repo:${local.github_owner}@*/${local.github_repo}@*:environment:${env}",
+      ]])
     }
   }
 }
